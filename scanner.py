@@ -36,6 +36,36 @@ def load_keywords():
     return out
 
 
+def fetch_volume(ticker):
+    """Fetch volume for a given ticker from finviz quote page"""
+    try:
+        # Add delay to avoid rate limiting
+        time.sleep(0.5)
+        
+        # Clean ticker symbol - remove any percentage signs or extra characters
+        clean_ticker = ticker.split('+')[0].split('-')[0].strip()
+        
+        url = f"https://finviz.com/quote.ashx?t={clean_ticker}&ty=c&p=d&b=1"
+        r = requests.get(url, headers=HEADERS, timeout=10)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "html.parser")
+        
+        # Find the volume in the fundamentals table
+        # Look for the cell that contains exactly "Volume" (not "Rel Volume" or "Avg Volume")
+        for td in soup.find_all("td", class_="snapshot-td2"):
+            text = td.get_text(strip=True)
+            if text == "Volume":  # Exact match only
+                # Get the next td which contains the volume value
+                volume_td = td.find_next_sibling("td")
+                if volume_td:
+                    volume = volume_td.get_text(strip=True)
+                    return volume
+        return "N/A"
+    except Exception as e:
+        print(f"Error fetching volume for {ticker}: {e}", flush=True)
+        return "N/A"
+
+
 def fetch_once():
     r = requests.get(URL, headers=HEADERS, timeout=10)
     r.raise_for_status()
@@ -70,6 +100,7 @@ def fetch_once():
             {
                 "title": title,
                 "tickers": tickers,
+                "volumes": {},  # Empty dict, will be populated on demand
             }
         )
 
@@ -175,11 +206,65 @@ class App:
             return
 
         for idx, r in enumerate(hits, start=1):
-            tick = ", ".join(r["tickers"]) if r["tickers"] else "—"
-            self.matched_txt.insert(
-                tk.END,
-                f"[{idx:02d}] {tick}  ⇒  {r['title']}\n"
-            )
+            if r["tickers"]:
+                # Check if we need to fetch any volumes
+                has_all_volumes = all(t in r["volumes"] for t in r["tickers"])
+                
+                if has_all_volumes:
+                    # All volumes already fetched, just display them
+                    tick_vol_list = []
+                    for t in r["tickers"]:
+                        tick_vol_list.append(f"{t}({r['volumes'][t]})")
+                    tick_vol = ", ".join(tick_vol_list)
+                    self.matched_txt.insert(
+                        tk.END,
+                        f"[{idx:02d}] {tick_vol}  ⇒  {r['title']}\n"
+                    )
+                else:
+                    # First, display with "loading..." for missing volumes
+                    tick_list = []
+                    for t in r["tickers"]:
+                        if t in r["volumes"]:
+                            tick_list.append(f"{t}({r['volumes'][t]})")
+                        else:
+                            tick_list.append(f"{t}(…)")
+                    tick_display = ", ".join(tick_list)
+                    self.matched_txt.insert(
+                        tk.END,
+                        f"[{idx:02d}] {tick_display}  ⇒  {r['title']}\n"
+                    )
+                    self.matched_txt.update()  # Force update display
+                    
+                    # Now fetch missing volumes one by one and update
+                    for t in r["tickers"]:
+                        if t not in r["volumes"]:
+                            r["volumes"][t] = fetch_volume(t)
+                            
+                            # Update the line with the new volume
+                            tick_vol_list = []
+                            for ticker in r["tickers"]:
+                                if ticker in r["volumes"]:
+                                    tick_vol_list.append(f"{ticker}({r['volumes'][ticker]})")
+                                else:
+                                    tick_vol_list.append(f"{ticker}(…)")
+                            tick_vol = ", ".join(tick_vol_list)
+                            
+                            # Replace the line
+                            content = self.matched_txt.get("1.0", tk.END)
+                            lines = content.split("\n")
+                            for i, line in enumerate(lines):
+                                if line.startswith(f"[{idx:02d}]"):
+                                    # Update this line
+                                    self.matched_txt.delete(f"{i+1}.0", f"{i+1}.end")
+                                    self.matched_txt.insert(f"{i+1}.0", f"[{idx:02d}] {tick_vol}  ⇒  {r['title']}")
+                                    self.matched_txt.update()  # Force update display
+                                    break
+            else:
+                tick_vol = "—"
+                self.matched_txt.insert(
+                    tk.END,
+                    f"[{idx:02d}] {tick_vol}  ⇒  {r['title']}\n"
+                )
 
     def safe_render(self, rows, keywords):
         self.root.after(0, self.render_all, rows, keywords)
