@@ -10,7 +10,7 @@
   },
   "finviz_elite": {
     "enabled": true,
-    "auth_token": "apikey",
+    "auth_token": "175de32f-e992-4b5b-a082-a047fdac9315",
     "news_url": "https://elite.finviz.com/news.ashx?v=3",
     "quote_url": "https://elite.finviz.com/quote.ashx",
     "export_url": "https://elite.finviz.com/quote_export.ashx"

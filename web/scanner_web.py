@@ -170,9 +170,9 @@ def fetch_once():
             if x.get_text(strip=True)
         ]
 
-        # Extract timestamp (e.g., "5m ago", "2h ago", "Dec-30-24")
+        # Extract timestamp (e.g., "6 min", "12 min")
         timestamp = ""
-        date_td = cell.find_next_sibling("td", class_="news_date-cell")
+        date_td = cell.find_previous_sibling("td", class_="news_date-cell")
         if date_td:
             timestamp = date_td.get_text(strip=True)
 
@@ -212,11 +212,8 @@ def get_config():
 @app.route('/api/feed')
 def get_feed():
     file_keywords = load_keywords()
-    all_keywords = file_keywords + runtime_keywords
     return jsonify({
-        'keywords': all_keywords,
-        'file_keywords': file_keywords,
-        'runtime_keywords': runtime_keywords,
+        'keywords': file_keywords,
         'rows': all_rows
     })
 
