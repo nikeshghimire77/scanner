@@ -4,8 +4,56 @@ let fileKeywords = [];
 let runtimeKeywords = [];
 let seenTitles = new Set();
 let hoverTimers = {}; // Track hover timers for each ticker
-let lastRefreshTime = Date.now(); // Track last auto-refresh time
 let appConfig = null; // Store config loaded from server
+let newsTimestamps = {}; // Track timestamps client-side: {title: {timestamp: "1 min", lastUpdate: Date}}
+
+// Parse time string like "1 min", "5 hour", "2 day" and return minutes
+function parseTimeToMinutes(timeStr) {
+    if (!timeStr) return 0;
+    
+    const match = timeStr.match(/(\d+)\s*(min|hour|day)/i);
+    if (!match) return 0;
+    
+    const value = parseInt(match[1]);
+    const unit = match[2].toLowerCase();
+    
+    if (unit.includes('min')) return value;
+    if (unit.includes('hour')) return value * 60;
+    if (unit.includes('day')) return value * 1440;
+    
+    return 0;
+}
+
+// Format minutes back to readable time string
+function formatMinutesToTime(minutes) {
+    if (minutes < 60) return `${minutes} min`;
+    if (minutes < 1440) {
+        const hours = Math.floor(minutes / 60);
+        return `${hours} hour${hours > 1 ? 's' : ''}`;
+    }
+    const days = Math.floor(minutes / 1440);
+    return `${days} day${days > 1 ? 's' : ''}`;
+}
+
+// Update timestamps every minute on the client side
+function updateTimestamps() {
+    const now = Date.now();
+    
+    Object.keys(newsTimestamps).forEach(title => {
+        const item = newsTimestamps[title];
+        const elapsed = Math.floor((now - item.lastUpdate) / 60000); // minutes passed
+        
+        if (elapsed >= 1) {
+            const currentMinutes = parseTimeToMinutes(item.timestamp);
+            const newMinutes = currentMinutes + elapsed;
+            item.timestamp = formatMinutesToTime(newMinutes);
+            item.lastUpdate = now;
+        }
+    });
+    
+    // Re-render to show updated times
+    renderMatched();
+}
 
 // Load configuration from server
 async function loadConfig() {
@@ -28,10 +76,8 @@ async function loadConfig() {
         // Return default config if loading fails
         return {
             refresh: {
-                auto_refresh_interval_seconds: 60,
-                hover_refresh_delay_seconds: 1,
-                feed_poll_interval_seconds: 15,
-                auto_refresh_check_interval_seconds: 10
+                news_poll_interval_seconds: 15,
+                hover_refresh_delay_seconds: 1
             }
         };
     }
@@ -67,8 +113,28 @@ async function fetchData() {
         // Update keywords display
         updateKeywordsDisplay();
         
-        // Check for new items
+        // Check for new items and initialize/update timestamps
         const oldTitles = new Set(allRows.map(r => r.title));
+        const now = Date.now();
+        
+        newRows.forEach(row => {
+            // Initialize or update timestamp tracking
+            if (!newsTimestamps[row.title]) {
+                // New item - start tracking
+                newsTimestamps[row.title] = {
+                    timestamp: row.timestamp || '0 min',
+                    lastUpdate: now
+                };
+            } else if (row.timestamp && row.timestamp !== newsTimestamps[row.title].timestamp) {
+                // Server sent updated timestamp - sync it
+                newsTimestamps[row.title].timestamp = row.timestamp;
+                newsTimestamps[row.title].lastUpdate = now;
+            }
+            
+            // Use client-side timestamp
+            row.timestamp = newsTimestamps[row.title].timestamp;
+        });
+        
         allRows = newRows;
         
         // Update stats
@@ -249,10 +315,12 @@ async function renderMatched(oldTitles = new Set()) {
             // Attach hover listeners for real-time refresh
             attachHoverListeners(tickersSpan, row);
             
-            // Fetch missing volumes progressively
+            // Fetch missing volumes progressively in background (non-blocking)
             for (const ticker of row.tickers) {
                 if (!row.volumes[ticker]) {
-                    await fetchVolume(ticker, row, tickersSpan);
+                    fetchVolume(ticker, row, tickersSpan).catch(err => {
+                        console.error(`Error fetching volume for ${ticker}:`, err);
+                    });
                 }
             }
         } else {
@@ -357,59 +425,6 @@ function attachHoverListeners(tickersSpan, row) {
             }
         });
     });
-}
-
-// Auto-refresh all matched tickers every minute
-async function autoRefreshMatchedTickers() {
-    if (!appConfig) return; // Wait for config to load
-    
-    const now = Date.now();
-    const refreshInterval = appConfig.refresh.auto_refresh_interval_seconds * 1000;
-    
-    // Check if the interval has passed since last refresh
-    if (now - lastRefreshTime < refreshInterval) {
-        return;
-    }
-    
-    lastRefreshTime = now;
-    
-    // Get all unique tickers from matched signals
-    const lowerKeywords = keywords.map(k => k.toLowerCase());
-    const matchedRows = allRows.filter(row => {
-        const text = (row.title + ' ' + row.tickers.join(' ')).toLowerCase();
-        return lowerKeywords.some(k => text.includes(k));
-    });
-    
-    const uniqueTickers = new Set();
-    matchedRows.forEach(row => {
-        row.tickers.forEach(ticker => {
-            const cleanTicker = cleanTickerSymbol(ticker);
-            uniqueTickers.add(cleanTicker);
-        });
-    });
-    
-    if (uniqueTickers.size > 0) {
-        console.log(`Auto-refreshing ${uniqueTickers.size} matched tickers...`);
-        
-        try {
-            const response = await fetch('/api/volume/refresh-matched', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ tickers: Array.from(uniqueTickers) })
-            });
-            
-            const data = await response.json();
-            if (data.success) {
-                console.log(`Refreshed ${data.refreshed.length} tickers`);
-                // Re-render matched section to show updated data
-                await fetchData();
-            }
-        } catch (error) {
-            console.error('Error auto-refreshing tickers:', error);
-        }
-    }
 }
 
 // Keyword Management Functions
@@ -545,23 +560,21 @@ async function initApp() {
     await fetchData();
     
     // Set up polling intervals using config
-    const feedPollInterval = appConfig 
-        ? appConfig.refresh.feed_poll_interval_seconds * 1000 
+    const newsPollInterval = appConfig 
+        ? appConfig.refresh.news_poll_interval_seconds * 1000 
         : 15000;
-    const autoRefreshCheckInterval = appConfig 
-        ? appConfig.refresh.auto_refresh_check_interval_seconds * 1000 
-        : 10000;
+    const hoverDelay = appConfig
+        ? appConfig.refresh.hover_refresh_delay_seconds
+        : 1;
     
-    console.log(`Feed poll interval: ${feedPollInterval / 1000}s`);
-    console.log(`Auto-refresh check interval: ${autoRefreshCheckInterval / 1000}s`);
-    console.log(`Auto-refresh interval: ${appConfig.refresh.auto_refresh_interval_seconds}s`);
-    console.log(`Hover refresh delay: ${appConfig.refresh.hover_refresh_delay_seconds}s`);
+    console.log(`News poll interval: ${newsPollInterval / 1000}s`);
+    console.log(`Hover refresh delay: ${hoverDelay}s`);
     
-    // Poll for updates
-    setInterval(fetchData, feedPollInterval);
+    // Poll for news updates (timestamps)
+    setInterval(fetchData, newsPollInterval);
     
-    // Check for auto-refresh
-    setInterval(autoRefreshMatchedTickers, autoRefreshCheckInterval);
+    // Update timestamps on client side every minute
+    setInterval(updateTimestamps, 60000); // 60 seconds
 }
 
 // Start the app

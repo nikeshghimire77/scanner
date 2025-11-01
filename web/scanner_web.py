@@ -70,6 +70,7 @@ def get_export_url(ticker):
 
 seen_urls = set()
 all_rows = []   # newest at top
+news_cache = {}  # Cache: {url: {title, tickers, timestamp, fetch_time}}
 runtime_keywords = []  # Keywords added via UI (not from file)
 
 app = Flask(__name__, static_folder='static')
@@ -144,8 +145,10 @@ def fetch_once():
     r = requests.get(news_url, headers=HEADERS, timeout=10)
     r.raise_for_status()
     soup = BeautifulSoup(r.text, "html.parser")
-
+    
+    current_time = time.time()
     rows = []
+    
     for cell in soup.select("td.news_link-cell"):
         a = cell.select_one("a.nn-tab-link")
         if not a:
@@ -160,30 +163,41 @@ def fetch_once():
         else:
             full_url = href
 
-        if full_url in seen_urls:
-            continue
-        seen_urls.add(full_url)
-
         tickers = [
             x.get_text(strip=True)
             for x in cell.select("a.fv-label.stock-news-label")
             if x.get_text(strip=True)
         ]
 
-        # Extract timestamp (e.g., "5m ago", "2h ago", "Dec-30-24")
+        # Extract timestamp from Finviz
         timestamp = ""
-        date_td = cell.find_next_sibling("td", class_="news_date-cell")
+        date_td = cell.find_previous_sibling("td", class_="news_date-cell")
         if date_td:
             timestamp = date_td.get_text(strip=True)
-
-        rows.append(
-            {
+        
+        # Check if this is a new item or if we should update cache
+        is_new = full_url not in news_cache
+        
+        if is_new:
+            # New item - store in cache with current time
+            news_cache[full_url] = {
                 "title": title,
                 "tickers": tickers,
                 "timestamp": timestamp,
-                "volumes": {},  # Empty dict, will be populated on demand with full metrics
+                "fetch_time": current_time,
+                "volumes": {}
             }
-        )
+            seen_urls.add(full_url)
+        
+        # Always use cached data (which may have client-updated timestamps)
+        cached_item = news_cache[full_url]
+        rows.append({
+            "title": cached_item["title"],
+            "tickers": cached_item["tickers"],
+            "timestamp": timestamp,  # Use fresh timestamp from Finviz
+            "fetch_time": cached_item["fetch_time"],  # Send fetch time to client
+            "volumes": cached_item.get("volumes", {})
+        })
 
     return rows
 
