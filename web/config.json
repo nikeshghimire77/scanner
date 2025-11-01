@@ -1,0 +1,27 @@
+{
+  "refresh": {
+    "auto_refresh_interval_seconds": 60,
+    "hover_refresh_delay_seconds": 1,
+    "feed_poll_interval_seconds": 15,
+    "auto_refresh_check_interval_seconds": 10
+  },
+  "api": {
+    "rate_limit_delay_seconds": 0.5
+  },
+  "finviz_elite": {
+    "enabled": true,
+    "auth_token": "apikey",
+    "news_url": "https://elite.finviz.com/news.ashx?v=3",
+    "quote_url": "https://elite.finviz.com/quote.ashx",
+    "export_url": "https://elite.finviz.com/quote_export.ashx"
+  },
+  "description": {
+    "auto_refresh_interval_seconds": "How often to automatically refresh volume data for all matched tickers",
+    "hover_refresh_delay_seconds": "How long to hover over a ticker before triggering a fresh data fetch",
+    "feed_poll_interval_seconds": "How often to poll finviz for new feed items",
+    "auto_refresh_check_interval_seconds": "How often to check if auto-refresh should run",
+    "rate_limit_delay_seconds": "Delay between API requests to finviz to avoid rate limiting",
+    "finviz_elite.enabled": "Set to true to use Elite API, false to use free version",
+    "finviz_elite.auth_token": "Your Finviz Elite API authentication token"
+  }
+}
