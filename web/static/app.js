@@ -38,6 +38,7 @@ function formatMinutesToTime(minutes) {
 // Update timestamps every minute on the client side
 function updateTimestamps() {
     const now = Date.now();
+    let updated = false;
     
     Object.keys(newsTimestamps).forEach(title => {
         const item = newsTimestamps[title];
@@ -48,11 +49,32 @@ function updateTimestamps() {
             const newMinutes = currentMinutes + elapsed;
             item.timestamp = formatMinutesToTime(newMinutes);
             item.lastUpdate = now;
+            updated = true;
+            
+            // Update the DOM directly without re-rendering everything
+            const matchedContainer = document.getElementById('matched-content');
+            if (matchedContainer) {
+                const items = matchedContainer.querySelectorAll('.news-item-matched');
+                items.forEach(itemDiv => {
+                    if (itemDiv.dataset.title === title) {
+                        const timestampSpan = itemDiv.querySelector('.timestamp');
+                        if (timestampSpan) {
+                            // Smooth fade update
+                            timestampSpan.style.opacity = '0.5';
+                            setTimeout(() => {
+                                timestampSpan.textContent = item.timestamp;
+                                timestampSpan.style.opacity = '0.8';
+                            }, 150);
+                        }
+                    }
+                });
+            }
         }
     });
     
-    // Re-render to show updated times
-    renderMatched();
+    if (updated) {
+        console.log('Timestamps updated smoothly');
+    }
 }
 
 // Load configuration from server
@@ -140,8 +162,7 @@ async function fetchData() {
         // Update stats
         updateStats();
         
-        // Render
-        renderAll();
+        // Render matched signals only
         renderMatched(oldTitles);
         
     } catch (error) {
@@ -184,38 +205,6 @@ function updateKeywordTags() {
     } else {
         runtimeKeywordsContainer.innerHTML = '<span class="no-keywords">(none)</span>';
     }
-}
-
-function renderAll() {
-    const container = document.getElementById('all-content');
-    
-    if (allRows.length === 0) {
-        container.innerHTML = '<div class="loading"><span class="spinner"></span> Loading feed...</div>';
-        return;
-    }
-    
-    let html = '';
-    allRows.forEach((row, index) => {
-        const tickersHtml = row.tickers.length > 0 
-            ? row.tickers.map(t => {
-                const colorClass = getTickerColorClass(t);
-                return `<span class="ticker ${colorClass} tooltip" data-tooltip="Loading stats...\nClick to view chart">${t}</span>`;
-            }).join(' ')
-            : '<span class="ticker">—</span>';
-        
-        const timestampHtml = row.timestamp ? `<span class="timestamp">${row.timestamp}</span>` : '';
-        
-        html += `
-            <div class="news-item" onclick="openTickerInfo('${row.tickers[0] || ''}')">
-                <span class="news-number">${(index + 1).toString().padStart(2, '0')}</span>
-                <span class="tickers">${tickersHtml}</span>
-                <span class="headline">${escapeHtml(row.title)}</span>
-                ${timestampHtml}
-            </div>
-        `;
-    });
-    
-    container.innerHTML = html;
 }
 
 // Helper function to determine ticker color class

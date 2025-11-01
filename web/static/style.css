@@ -101,12 +101,15 @@ section {
 }
 
 .matched-section {
-    flex-shrink: 0;
+    flex: 1; /* Take full available space */
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
 }
 
 .all-section {
     flex: 1;
-    display: flex;
+    display: none; /* Hidden - only showing matched signals */
     flex-direction: column;
     overflow: hidden;
 }
@@ -172,9 +175,8 @@ section {
 .matched-content {
     background: linear-gradient(180deg, #1e3a8a 0%, #1e40af 100%);
     color: #dbeafe;
-    min-height: 250px;
-    max-height: 350px;
-    flex-shrink: 0;
+    flex: 1; /* Fill available space */
+    min-height: 100%;
 }
 
 .all-content {
@@ -525,6 +527,7 @@ section {
     margin-left: 8px;
     font-style: italic;
     opacity: 0.8;
+    transition: opacity 0.3s ease, color 0.3s ease;
 }
 
 .matched-content .timestamp {
