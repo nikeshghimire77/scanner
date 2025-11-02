@@ -148,8 +148,12 @@ def fetch_once():
     
     current_time = time.time()
     rows = []
+    cells_found = soup.select("td.news_link-cell")
     
-    for cell in soup.select("td.news_link-cell"):
+    import sys
+    print(f"Fetched from Finviz: found {len(cells_found)} news cells", file=sys.stderr, flush=True)
+    
+    for cell in cells_found:
         a = cell.select_one("a.nn-tab-link")
         if not a:
             continue
@@ -188,6 +192,7 @@ def fetch_once():
                 "volumes": {}
             }
             seen_urls.add(full_url)
+            print(f"New item in cache: {title[:50]}...", file=sys.stderr, flush=True)
         
         # Always use cached data (which may have client-updated timestamps)
         cached_item = news_cache[full_url]
@@ -196,9 +201,11 @@ def fetch_once():
             "tickers": cached_item["tickers"],
             "timestamp": timestamp,  # Use fresh timestamp from Finviz
             "fetch_time": cached_item["fetch_time"],  # Send fetch time to client
-            "volumes": cached_item.get("volumes", {})
+            "volumes": cached_item.get("volumes", {}),
+            "url": full_url  # Include URL for deduplication
         })
 
+    print(f"Returning {len(rows)} items from fetch_once()", file=sys.stderr, flush=True)
     return rows
 
 
@@ -344,6 +351,11 @@ def worker():
         # first pull
         initial = fetch_once()
         print(f"Fetched {len(initial)} items", file=sys.stderr, flush=True)
+        # Ensure all initial items have URLs for deduplication
+        for item in initial:
+            if 'url' not in item:
+                # Generate URL from title if missing
+                item['url'] = item.get('title', '')
         all_rows.extend(initial)
         print("Initial fetch complete", file=sys.stderr, flush=True)
     except Exception as e:
@@ -356,13 +368,46 @@ def worker():
         time.sleep(poll_interval)
         
         try:
-            new_items = fetch_once()
-            if new_items:
-                for item in reversed(new_items):
-                    all_rows.insert(0, item)
-                print(f"Added {len(new_items)} new items", file=sys.stderr, flush=True)
+            fetched_items = fetch_once()
+            if fetched_items:
+                # Track existing items by both URL and title to catch all duplicates
+                existing_urls = {row.get('url', '') for row in all_rows if row.get('url')}
+                existing_titles = {row.get('title', '').lower().strip() for row in all_rows if row.get('title')}
+                
+                # Only add truly new items
+                # Check both URL and title - if either is new, add the item
+                new_items = []
+                for item in fetched_items:
+                    item_url = item.get('url', '').strip()
+                    item_title = item.get('title', '').lower().strip()
+                    
+                    # Check if URL is new
+                    is_new_by_url = item_url and item_url not in existing_urls
+                    # Check if title is new
+                    is_new_by_title = item_title and item_title not in existing_titles
+                    
+                    # If EITHER URL or title is new, treat it as a new item
+                    # This catches cases where URL format might change or be missing
+                    if is_new_by_url or is_new_by_title:
+                        if 'url' not in item or not item['url']:
+                            # Generate URL from title if missing
+                            item['url'] = item_url or item.get('title', '')
+                        new_items.append(item)
+                        if item_url:
+                            existing_urls.add(item_url)
+                        if item_title:
+                            existing_titles.add(item_title)
+                
+                if new_items:
+                    for item in reversed(new_items):
+                        all_rows.insert(0, item)
+                    print(f"Added {len(new_items)} new items (filtered from {len(fetched_items)} total fetched)", file=sys.stderr, flush=True)
+                else:
+                    print(f"No new items (checked {len(fetched_items)} items from Finviz)", file=sys.stderr, flush=True)
         except Exception as e:
             print(f"Error fetching news: {e}", file=sys.stderr, flush=True)
+            import traceback
+            traceback.print_exc(file=sys.stderr)
 
 
 # Start the worker thread

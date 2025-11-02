@@ -3,69 +3,41 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>⛩ FINVIZ FEED // watch & scalp</title>
-    <link rel="stylesheet" href="/style.css?v=13">
+    <title>NISAN Scanner</title>
+    <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+    <div id="urgent-alert" class="urgent-alert hidden">
+        <div class="urgent-alert-content">
+            <div class="urgent-badge">🚨 URGENT 🚨</div>
+            <div class="urgent-tickers" id="urgent-tickers"></div>
+            <div class="urgent-title" id="urgent-title"></div>
+            <button class="urgent-close" onclick="closeUrgentAlert()">CLOSE</button>
+        </div>
+    </div>
+
     <div class="container">
         <header>
-            <h1>
-                <span class="status-indicator status-live"></span>
-                ⛩ FINVIZ FEED // watch & scalp
-                <span id="elite-badge" class="elite-badge" style="display: none;">⚡ ELITE</span>
-            </h1>
-            <div class="header-stats">
-                <div class="stat-item">
-                    <span class="stat-label">Total News</span>
-                    <span class="stat-value" id="total-count">0</span>
-                </div>
-                <div class="stat-item">
-                    <span class="stat-label">Matches</span>
-                    <span class="stat-value" id="match-count">0</span>
-                </div>
-                <div class="stat-item">
-                    <span class="stat-label">Last Update</span>
-                    <span class="stat-value" id="last-update">--:--</span>
-                </div>
+            <div class="header-left">
+                <div class="header-text">NISAN Scanner</div>
+                <div class="unread-counter" id="unread-counter"></div>
+                <a href="?simulate=true" class="test-link" title="Simulate multiple breaking news alerts">SIMULATE</a>
+            </div>
+            <div class="header-right">
+                <button class="clear-read-btn" onclick="clearReadTitles()" title="Clear all read items (Press C)">Clear Read</button>
             </div>
         </header>
 
-        <!-- Matched Signals Section -->
         <section class="matched-section">
-            <div class="section-header matched-header">
-                <h2>MATCHED SIGNALS</h2>
-                <div class="keywords-display">
-                    Watching: <span id="keywords-list">loading...</span>
-                </div>
+            <div class="section-header">
+                Matched Signals
             </div>
-            
-            <!-- Keyword Management UI -->
-            <div class="keyword-management">
-                <div class="keyword-input-group">
-                    <input type="text" id="keyword-input" placeholder="Add keyword..." />
-                    <button id="add-keyword-btn" class="btn btn-add">+ Add</button>
-                    <button id="clear-all-btn" class="btn btn-clear">Clear UI Keywords</button>
-                    <button id="reload-file-btn" class="btn btn-reload">↻ Reload File</button>
-                </div>
-                
-                <div class="keywords-container">
-                    <div class="keywords-group">
-                        <div class="keywords-group-header">From keywords.txt:</div>
-                        <div id="file-keywords" class="keyword-tags"></div>
-                    </div>
-                    <div class="keywords-group">
-                        <div class="keywords-group-header">Added in UI:</div>
-                        <div id="runtime-keywords" class="keyword-tags"></div>
-                    </div>
-                </div>
-            </div>
-            
             <div id="matched-content" class="content matched-content">
-                <div class="loading">...no hits yet... (★ leave window open)</div>
+                <div class="loading">No matches yet. Waiting for news…</div>
             </div>
         </section>
     </div>
 
-    <script src="/app.js?v=8"></script>
+    <script src="/app.js"></script>
 </body>
 </html>

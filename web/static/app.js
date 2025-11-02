@@ -1,124 +1,290 @@
 let allRows = [];
 let keywords = [];
-let fileKeywords = [];
-let runtimeKeywords = [];
 let seenTitles = new Set();
-let hoverTimers = {}; // Track hover timers for each ticker
-let appConfig = null; // Store config loaded from server
-let newsTimestamps = {}; // Track timestamps client-side: {title: {timestamp: "1 min", lastUpdate: Date}}
+let readTitles = new Map(); // Track which news items user has seen/read: {title: timestamp}
+let isFirstLoad = true; // Track if this is the first data fetch
+let alertQueue = []; // Queue for multiple popup alerts
+let isShowingAlert = false; // Track if alert is currently visible
 
-// Parse time string like "1 min", "5 hour", "2 day" and return minutes
-function parseTimeToMinutes(timeStr) {
-    if (!timeStr) return 0;
-    
-    const match = timeStr.match(/(\d+)\s*(min|hour|day)/i);
-    if (!match) return 0;
-    
-    const value = parseInt(match[1]);
-    const unit = match[2].toLowerCase();
-    
-    if (unit.includes('min')) return value;
-    if (unit.includes('hour')) return value * 60;
-    if (unit.includes('day')) return value * 1440;
-    
-    return 0;
+const READ_EXPIRY_HOURS = 4; // Read status expires after 4 hours (fresh for trading sessions)
+
+// Get start of current day in milliseconds
+function getStartOfDay() {
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    return now.getTime();
 }
 
-// Format minutes back to readable time string
-function formatMinutesToTime(minutes) {
-    if (minutes < 60) return `${minutes} min`;
-    if (minutes < 1440) {
-        const hours = Math.floor(minutes / 60);
-        return `${hours} hour${hours > 1 ? 's' : ''}`;
-    }
-    const days = Math.floor(minutes / 1440);
-    return `${days} day${days > 1 ? 's' : ''}`;
-}
+// Load read titles from localStorage with expiration check
+function loadReadTitles() {
+    try {
+        const saved = localStorage.getItem('readTitles');
+        const now = Date.now();
+        const startOfDay = getStartOfDay();
 
-// Update timestamps every minute on the client side
-function updateTimestamps() {
-    const now = Date.now();
-    let updated = false;
-    
-    Object.keys(newsTimestamps).forEach(title => {
-        const item = newsTimestamps[title];
-        const elapsed = Math.floor((now - item.lastUpdate) / 60000); // minutes passed
-        
-        if (elapsed >= 1) {
-            const currentMinutes = parseTimeToMinutes(item.timestamp);
-            const newMinutes = currentMinutes + elapsed;
-            item.timestamp = formatMinutesToTime(newMinutes);
-            item.lastUpdate = now;
-            updated = true;
-            
-            // Update the DOM directly without re-rendering everything
-            const matchedContainer = document.getElementById('matched-content');
-            if (matchedContainer) {
-                const items = matchedContainer.querySelectorAll('.news-item-matched');
-                items.forEach(itemDiv => {
-                    if (itemDiv.dataset.title === title) {
-                        const timestampSpan = itemDiv.querySelector('.timestamp');
-                        if (timestampSpan) {
-                            // Smooth fade update
-                            timestampSpan.style.opacity = '0.5';
-                            setTimeout(() => {
-                                timestampSpan.textContent = item.timestamp;
-                                timestampSpan.style.opacity = '0.8';
-                            }, 150);
-                        }
+        if (saved) {
+            const data = JSON.parse(saved);
+
+            // Handle old format (just array of titles) - ignore it, start fresh
+            if (Array.isArray(data)) {
+                return;
+            }
+
+            // Check if we need to clear for new day
+            const lastCleared = data.lastCleared || 0;
+            if (lastCleared < startOfDay) {
+                // New day started, clear everything
+                readTitles.clear();
+                saveReadTitles();
+                return;
+            }
+
+            // New format: {titles: {title: timestamp}, lastCleared: timestamp}
+            if (data.titles && typeof data.titles === 'object') {
+                const expiryMs = READ_EXPIRY_HOURS * 60 * 60 * 1000;
+                // Only keep items that haven't expired
+                Object.entries(data.titles).forEach(([title, timestamp]) => {
+                    if (now - timestamp < expiryMs) {
+                        readTitles.set(title, timestamp);
                     }
                 });
             }
         }
-    });
-    
-    if (updated) {
-        console.log('Timestamps updated smoothly');
+    } catch (e) {
+        console.error('Error loading read titles:', e);
     }
 }
 
-// Load configuration from server
-async function loadConfig() {
+// Save read titles to localStorage
+function saveReadTitles() {
     try {
-        const response = await fetch('/api/config');
-        appConfig = await response.json();
-        console.log('Config loaded:', appConfig);
-        
-        // Show Elite badge if enabled
-        if (appConfig.finviz_elite && appConfig.finviz_elite.enabled) {
-            document.getElementById('elite-badge').style.display = 'inline-block';
-            console.log('🚀 Finviz Elite mode ENABLED - Real-time data active!');
-        } else {
-            console.log('📊 Using free Finviz data (15-minute delay)');
-        }
-        
-        return appConfig;
-    } catch (error) {
-        console.error('Error loading config:', error);
-        // Return default config if loading fails
-        return {
-            refresh: {
-                news_poll_interval_seconds: 15,
-                hover_refresh_delay_seconds: 1
-            }
+        const data = {
+            titles: Object.fromEntries(readTitles),
+            lastCleared: Date.now()
         };
+        localStorage.setItem('readTitles', JSON.stringify(data));
+    } catch (e) {
+        console.error('Error saving read titles:', e);
     }
 }
 
-// Update header stats
-function updateStats() {
-    document.getElementById('total-count').textContent = allRows.length;
-    
-    const lowerKeywords = keywords.map(k => k.toLowerCase());
-    const matchCount = allRows.filter(row => {
-        const text = (row.title + ' ' + row.tickers.join(' ')).toLowerCase();
-        return lowerKeywords.some(k => text.includes(k));
-    }).length;
-    document.getElementById('match-count').textContent = matchCount;
-    
-    const now = new Date();
-    const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-    document.getElementById('last-update').textContent = timeStr;
+// Check if a title is read (and not expired)
+function isRead(title) {
+    if (!readTitles.has(title)) return false;
+    const timestamp = readTitles.get(title);
+    const now = Date.now();
+    const expiryMs = READ_EXPIRY_HOURS * 60 * 60 * 1000;
+    return (now - timestamp) < expiryMs;
+}
+
+// Mark a title as read
+function markAsRead(title) {
+    readTitles.set(title, Date.now());
+    saveReadTitles();
+}
+
+// Clear all read titles (manual reset)
+function clearReadTitles() {
+    readTitles.clear();
+    saveReadTitles();
+    // Re-render to show all items as unread
+    const newTitles = new Set(allRows.map(row => row.title));
+    renderMatched(newTitles);
+    updateUnreadCounter();
+}
+
+// Load on page load
+loadReadTitles();
+
+// Show urgent alert popup (with queue support for multiple news)
+function showUrgentAlert(title, tickers, queuePosition = null, totalInQueue = null) {
+    const alert = document.getElementById('urgent-alert');
+    const tickersEl = document.getElementById('urgent-tickers');
+    const titleEl = document.getElementById('urgent-title');
+
+    if (!alert) return;
+
+    // If already showing an alert, queue this one instead
+    if (isShowingAlert) {
+        alertQueue.push({
+            title: title,
+            tickers: tickers,
+            position: queuePosition,
+            total: totalInQueue
+        });
+        return;
+    }
+
+    const tickerStr = tickers && tickers.length > 0 ? tickers.join(', ') : 'News';
+
+    // Show queue position if multiple items
+    let displayTitle = title;
+    if (queuePosition !== null && totalInQueue !== null && totalInQueue > 1) {
+        displayTitle = `[${queuePosition}/${totalInQueue}] ${title}`;
+    }
+
+    tickersEl.textContent = tickerStr;
+    titleEl.textContent = displayTitle;
+
+    alert.classList.remove('hidden');
+    isShowingAlert = true;
+
+    // Play URGENT ALARM - intense emergency alert
+    try {
+        let audioContext = window.audioContext;
+        if (!audioContext) {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            window.audioContext = audioContext;
+        }
+
+        if (audioContext.state === 'suspended') {
+            audioContext.resume();
+        }
+
+        const now = audioContext.currentTime;
+        const totalDuration = 1.2; // Longer alarm
+
+        // Create multiple oscillators for intense alarm (like fire alarm)
+        // Low frequency rumble
+        const lowOsc = audioContext.createOscillator();
+        const lowGain = audioContext.createGain();
+        lowOsc.connect(lowGain);
+        lowGain.connect(audioContext.destination);
+        lowOsc.frequency.value = 220; // Low rumble
+        lowOsc.type = 'square'; // Harsh square wave
+        lowGain.gain.setValueAtTime(0, now);
+        lowGain.gain.linearRampToValueAtTime(0.8, now + 0.02);
+        lowGain.gain.setValueAtTime(0.8, now + totalDuration * 0.9);
+        lowGain.gain.linearRampToValueAtTime(0, now + totalDuration);
+        lowOsc.start(now);
+        lowOsc.stop(now + totalDuration);
+
+        // High frequency alarm (very fast pulses)
+        for (let i = 0; i < 8; i++) {
+            const pulseTime = now + (i * 0.15);
+            const osc = audioContext.createOscillator();
+            const gain = audioContext.createGain();
+
+            osc.connect(gain);
+            gain.connect(audioContext.destination);
+
+            // Very high, sharp frequency
+            osc.frequency.value = 2000 + (i % 2) * 400; // Alternating high pitches
+            osc.type = 'square'; // Harsh and piercing
+
+            // Aggressive attack
+            gain.gain.setValueAtTime(0, pulseTime);
+            gain.gain.linearRampToValueAtTime(1.0, pulseTime + 0.01); // Max volume
+            gain.gain.setValueAtTime(1.0, pulseTime + 0.08);
+            gain.gain.linearRampToValueAtTime(0, pulseTime + 0.12);
+
+            osc.start(pulseTime);
+            osc.stop(pulseTime + 0.12);
+        }
+
+        // Continuous high-pitched wail
+        const wailOsc = audioContext.createOscillator();
+        const wailGain = audioContext.createGain();
+        wailOsc.connect(wailGain);
+        wailGain.connect(audioContext.destination);
+
+        // Fast sweeping siren
+        wailOsc.frequency.setValueAtTime(1600, now);
+        wailOsc.frequency.exponentialRampToValueAtTime(800, now + 0.1);
+        wailOsc.frequency.exponentialRampToValueAtTime(1600, now + 0.2);
+        wailOsc.frequency.exponentialRampToValueAtTime(800, now + 0.3);
+        wailOsc.frequency.exponentialRampToValueAtTime(1600, now + 0.4);
+        wailOsc.frequency.exponentialRampToValueAtTime(800, now + 0.5);
+        wailOsc.frequency.exponentialRampToValueAtTime(1600, now + 0.6);
+
+        wailOsc.type = 'sawtooth';
+        wailGain.gain.setValueAtTime(0.9, now);
+        wailGain.gain.setValueAtTime(0.9, now + totalDuration * 0.8);
+        wailGain.gain.linearRampToValueAtTime(0, now + totalDuration);
+
+        wailOsc.start(now);
+        wailOsc.stop(now + totalDuration);
+
+    } catch (e) {
+        console.error('Sound error:', e);
+    }
+
+    // Browser notification
+    if ("Notification" in window && Notification.permission === "granted") {
+        new Notification(`🚨 URGENT: ${tickerStr}`, { body: title });
+    }
+}
+
+function closeUrgentAlert() {
+    const alert = document.getElementById('urgent-alert');
+    if (alert) {
+        alert.classList.add('hidden');
+        isShowingAlert = false;
+
+        // Show next alert in queue if any
+        if (alertQueue.length > 0) {
+            const nextAlert = alertQueue.shift();
+            const totalRemaining = alertQueue.length + 1; // +1 for the one we're about to show
+            const position = totalRemaining > 1 ? (totalRemaining - alertQueue.length) : null;
+
+            setTimeout(() => {
+                showUrgentAlert(
+                    nextAlert.title,
+                    nextAlert.tickers,
+                    nextAlert.position || position,
+                    nextAlert.total || (totalRemaining > 1 ? totalRemaining : null)
+                );
+            }, 500); // Small delay between alerts
+        }
+    }
+}
+
+// Process multiple alerts - queue them if needed
+function processAlerts(newItems) {
+    if (newItems.length === 0) return;
+
+    // If multiple items, show first one and queue the rest
+    if (newItems.length === 1) {
+        // Single item - show immediately or queue if one is showing
+        if (!isShowingAlert) {
+            showUrgentAlert(newItems[0].title, newItems[0].tickers);
+        } else {
+            // Queue it - will show after current one closes
+            alertQueue.push({ title: newItems[0].title, tickers: newItems[0].tickers });
+        }
+    } else {
+        // Multiple items - show first, queue rest
+        const first = newItems[0];
+        const rest = newItems.slice(1);
+
+        if (!isShowingAlert) {
+            // Show first with counter
+            showUrgentAlert(first.title, first.tickers, 1, newItems.length);
+            // Queue the rest
+            rest.forEach(item => {
+                alertQueue.push({ title: item.title, tickers: item.tickers });
+            });
+        } else {
+            // Already showing one - add all to queue (they'll show in order)
+            // Calculate position based on current queue
+            const startPosition = alertQueue.length + 2; // +2 because: current alert (1) + queue (alertQueue.length) + these new ones starting at position
+            const totalAfter = alertQueue.length + newItems.length + 1; // +1 for currently showing
+
+            newItems.forEach((item, index) => {
+                alertQueue.push({
+                    title: item.title,
+                    tickers: item.tickers,
+                    position: startPosition + index,
+                    total: totalAfter
+                });
+            });
+        }
+    }
+}
+
+// Request notification permission on load
+if ("Notification" in window && Notification.permission === "default") {
+    Notification.requestPermission();
 }
 
 // Fetch data from the server
@@ -126,445 +292,382 @@ async function fetchData() {
     try {
         const response = await fetch('/api/feed');
         const data = await response.json();
-        
-        keywords = data.keywords;
-        fileKeywords = data.file_keywords || [];
-        runtimeKeywords = data.runtime_keywords || [];
-        const newRows = data.rows;
-        
-        // Update keywords display
-        updateKeywordsDisplay();
-        
-        // Check for new items and initialize/update timestamps
-        const oldTitles = new Set(allRows.map(r => r.title));
-        const now = Date.now();
-        
+
+        keywords = data.keywords || [];
+        const newRows = data.rows || [];
+
+        const oldTitles = new Set(seenTitles);
+        const newTitles = new Set(); // Track which items are brand new this update
+
+        // On first load, mark ALL existing items as READ so they disappear immediately
+        // User only wants to see NEW news that arrives AFTER they start watching
+        if (isFirstLoad) {
+            newRows.forEach(row => {
+                seenTitles.add(row.title);
+                markAsRead(row.title); // Mark as read so they don't show at all
+            });
+            isFirstLoad = false;
+            // Don't show anything on first load - clean slate
+            allRows = [];
+            renderMatched(new Set()); // Empty - show nothing
+            updateUnreadCounter();
+            return;
+        }
+
+        // Only notify if keywords exist AND news matches AND it's truly new
+        if (keywords.length > 0) {
+            // Collect all new matching items first
+            const newMatchingItems = [];
+
+            newRows.forEach(row => {
+                const text = (row.title + ' ' + (row.tickers || []).join(' ')).toLowerCase();
+                const matches = lowerKeywords.some(k => text.includes(k));
+
+                // Only popup if it matches keywords AND wasn't seen before (truly new) AND not already read
+                if (matches && !oldTitles.has(row.title) && !isRead(row.title)) {
+                    newMatchingItems.push(row);
+                    newTitles.add(row.title); // Mark as new for visual indicator
+                }
+            });
+
+            // Process alerts (queues multiple items)
+            processAlerts(newMatchingItems);
+        }
+        // If no keywords: no popups, just show in list
+
+        // Track new items that appeared (for visual indicator only, not popups)
         newRows.forEach(row => {
-            // Initialize or update timestamp tracking
-            if (!newsTimestamps[row.title]) {
-                // New item - start tracking
-                newsTimestamps[row.title] = {
-                    timestamp: row.timestamp || '0 min',
-                    lastUpdate: now
-                };
-            } else if (row.timestamp && row.timestamp !== newsTimestamps[row.title].timestamp) {
-                // Server sent updated timestamp - sync it
-                newsTimestamps[row.title].timestamp = row.timestamp;
-                newsTimestamps[row.title].lastUpdate = now;
+            if (!oldTitles.has(row.title)) {
+                newTitles.add(row.title);
             }
-            
-            // Use client-side timestamp
-            row.timestamp = newsTimestamps[row.title].timestamp;
+            seenTitles.add(row.title);
         });
-        
+
         allRows = newRows;
-        
-        // Update stats
-        updateStats();
-        
-        // Render matched signals only
-        renderMatched(oldTitles);
-        
+        renderMatched(newTitles);
+        updateUnreadCounter();
+
     } catch (error) {
         console.error('Error fetching data:', error);
+        document.getElementById('matched-content').innerHTML = '<div class="loading">Error loading feed. Refresh the page.</div>';
     }
 }
 
-function updateKeywordsDisplay() {
-    const keywordsList = document.getElementById('keywords-list');
-    if (keywords.length > 0) {
-        keywordsList.textContent = keywords.join(', ');
-    } else {
-        keywordsList.textContent = '(none)';
-    }
-    
-    // Update the keyword tags
-    updateKeywordTags();
-}
-
-function updateKeywordTags() {
-    // Update file keywords display
-    const fileKeywordsContainer = document.getElementById('file-keywords');
-    if (fileKeywords.length > 0) {
-        fileKeywordsContainer.innerHTML = fileKeywords.map(kw => 
-            `<span class="keyword-tag file-keyword">${escapeHtml(kw)}</span>`
-        ).join('');
-    } else {
-        fileKeywordsContainer.innerHTML = '<span class="no-keywords">(empty)</span>';
-    }
-    
-    // Update runtime keywords display
-    const runtimeKeywordsContainer = document.getElementById('runtime-keywords');
-    if (runtimeKeywords.length > 0) {
-        runtimeKeywordsContainer.innerHTML = runtimeKeywords.map(kw => 
-            `<span class="keyword-tag runtime-keyword">
-                ${escapeHtml(kw)}
-                <button class="remove-keyword" onclick="removeKeyword('${escapeHtml(kw)}')">×</button>
-            </span>`
-        ).join('');
-    } else {
-        runtimeKeywordsContainer.innerHTML = '<span class="no-keywords">(none)</span>';
-    }
-}
-
-// Helper function to determine ticker color class
 function getTickerColorClass(ticker) {
     if (ticker.includes('+')) return 'positive';
     if (ticker.includes('-')) return 'negative';
     return '';
 }
 
-// Helper function to clean ticker symbol
-function cleanTickerSymbol(ticker) {
-    return ticker.split('+')[0].split('-')[0].trim();
-}
+// Highlight matched keywords in headline for instant recognition
+function highlightKeywords(text, keywords) {
+    if (!keywords || keywords.length === 0) return escapeHtml(text);
 
-async function renderMatched(oldTitles = new Set()) {
-    const container = document.getElementById('matched-content');
-    
-    if (keywords.length === 0) {
-        container.innerHTML = '<div class="loading">No keywords.txt => passively watching feed…</div>';
-        return;
-    }
-    
-    const lowerKeywords = keywords.map(k => k.toLowerCase());
-    const hits = allRows.filter(row => {
-        const text = (row.title + ' ' + row.tickers.join(' ')).toLowerCase();
-        return lowerKeywords.some(k => text.includes(k));
+    let highlighted = escapeHtml(text);
+    const lowerText = text.toLowerCase();
+
+    keywords.forEach(keyword => {
+        const lowerKeyword = keyword.toLowerCase();
+        if (lowerText.includes(lowerKeyword)) {
+            // Use case-insensitive replacement
+            const regex = new RegExp(`(${escapeRegex(keyword)})`, 'gi');
+            highlighted = highlighted.replace(regex, '<mark>$1</mark>');
+        }
     });
-    
-    if (hits.length === 0) {
-        container.innerHTML = '<div class="loading">…no hits yet… (★ leave window open)</div>';
+
+    return highlighted;
+}
+
+function escapeRegex(str) {
+    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Update unread counter
+function updateUnreadCounter() {
+    const counter = document.getElementById('unread-counter');
+    if (!counter) return;
+
+    const unreadCount = allRows.filter(row => !isRead(row.title)).length;
+    if (unreadCount > 0) {
+        counter.textContent = `${unreadCount} unread`;
+        counter.classList.add('has-unread');
+    } else {
+        counter.textContent = '0 unread';
+        counter.classList.remove('has-unread');
+    }
+}
+
+function renderMatched(newTitles = new Set()) {
+    const container = document.getElementById('matched-content');
+
+    if (!keywords || keywords.length === 0) {
+        // No keywords: show ALL news
+        if (allRows.length === 0) {
+            container.innerHTML = '<div class="loading">No keywords configured. Showing all news when available…</div>';
+            return;
+        }
+
+        // Filter out read items - only show unread news
+        const unreadRows = allRows.filter(row => !isRead(row.title));
+
+        if (unreadRows.length === 0) {
+            container.innerHTML = '<div class="loading">All news read. Waiting for new items…</div>';
+            return;
+        }
+
+        // Show only unread news items
+        let html = '';
+        unreadRows.forEach((row, i) => {
+            const isNew = newTitles.has(row.title);
+            const itemClass = isNew ? 'news-item new-item' : 'news-item';
+
+            const tickersHtml = row.tickers && row.tickers.length > 0
+                ? row.tickers.map(t => {
+                    const colorClass = getTickerColorClass(t);
+                    return `<span class="ticker ${colorClass}">${escapeHtml(t)}</span>`;
+                }).join('')
+                : '<span class="ticker">—</span>';
+
+            const timestampHtml = row.timestamp ? `<span class="timestamp">${escapeHtml(row.timestamp)}</span>` : '';
+            const newBadge = isNew ? '<span class="new-badge">NEW</span>' : '';
+
+            html += `
+                <div class="${itemClass}" data-title="${escapeHtml(row.title)}" data-url="${escapeHtml(row.url || '')}">
+                    <span class="news-number">${i + 1}</span>
+                    ${newBadge}
+                    <div class="tickers">${tickersHtml}</div>
+                    <div class="headline">${highlightKeywords(row.title, keywords)}</div>
+                    ${timestampHtml}
+                </div>
+            `;
+        });
+
+        container.innerHTML = html;
+
+        // Open article in new tab when clicked, then mark as read and remove
+        container.querySelectorAll('.news-item').forEach(item => {
+            item.addEventListener('click', () => {
+                const title = item.dataset.title;
+                const url = item.dataset.url;
+
+                if (title) {
+                    // Open article in new tab if URL exists
+                    if (url) {
+                        window.open(url, '_blank');
+                    }
+
+                    // Mark as read and remove from view
+                    markAsRead(title);
+                    item.remove();
+                    // Re-render to update numbers and counter
+                    renderMatched(newTitles);
+                    updateUnreadCounter();
+                }
+            });
+        });
+
+        // Auto-mark as read after 30 seconds and remove from view
+        newTitles.forEach(title => {
+            setTimeout(() => {
+                if (!isRead(title)) {
+                    markAsRead(title);
+                    // Re-render to remove the item
+                    renderMatched(newTitles);
+                    updateUnreadCounter();
+                }
+            }, 30000);
+        });
+
         return;
     }
-    
-    container.innerHTML = '';
-    
-    for (let i = 0; i < hits.length; i++) {
-        const row = hits[i];
-        const isNew = !oldTitles.has(row.title);
-        
-        // Create item element
-        const itemDiv = document.createElement('div');
-        itemDiv.className = `news-item news-item-matched ${isNew ? 'new-item' : ''}`;
-        itemDiv.dataset.title = row.title;
-        itemDiv.onclick = () => openTickerInfo(row.tickers[0] || '');
-        
-        const numberSpan = document.createElement('span');
-        numberSpan.className = 'news-number';
-        numberSpan.textContent = `[${(i + 1).toString().padStart(2, '0')}]`;
-        
-        const tickersSpan = document.createElement('span');
-        tickersSpan.className = 'tickers';
-        
-        const arrowSpan = document.createElement('span');
-        arrowSpan.className = 'arrow';
-        arrowSpan.textContent = ' ⇒ ';
-        
-        const headlineSpan = document.createElement('span');
-        headlineSpan.className = 'headline';
-        headlineSpan.textContent = row.title;
-        
-        const timestampSpan = document.createElement('span');
-        timestampSpan.className = 'timestamp';
-        timestampSpan.textContent = row.timestamp || '';
-        
-        itemDiv.appendChild(numberSpan);
-        itemDiv.appendChild(tickersSpan);
-        itemDiv.appendChild(arrowSpan);
-        itemDiv.appendChild(headlineSpan);
-        if (row.timestamp) {
-            itemDiv.appendChild(timestampSpan);
+
+    const lowerKeywords = keywords.map(k => k.toLowerCase());
+
+    // Deduplicate by title (in case backend sends duplicates)
+    const seenInThisRender = new Set();
+    const uniqueHits = allRows.filter(row => {
+        const text = (row.title + ' ' + (row.tickers || []).join(' ')).toLowerCase();
+        const matches = lowerKeywords.some(k => text.includes(k));
+
+        if (matches && !seenInThisRender.has(row.title)) {
+            seenInThisRender.add(row.title);
+            return true;
         }
-        
-        container.appendChild(itemDiv);
-        
-        // Display tickers with loading indicator
-        if (row.tickers.length > 0) {
-            let tickerElements = row.tickers.map(t => {
-                const colorClass = getTickerColorClass(t);
-                const metrics = row.volumes[t];
-                
-                if (metrics && typeof metrics === 'object') {
-                    // Build tooltip with change color
-                    let changeDisplay = metrics.change || 'N/A';
-                    let changeColor = '';
-                    if (changeDisplay !== 'N/A' && changeDisplay.includes('%')) {
-                        changeColor = changeDisplay.startsWith('-') ? '🔴' : '🟢';
-                    }
-                    
-                    const tooltipText = `${changeColor} Change: ${changeDisplay}\nRel Volume: ${metrics.rel_volume}\nVolume: ${metrics.volume}\nShs Float: ${metrics.shs_float}\n\nClick to see chart`;
-                    return `<span class="ticker ${colorClass} tooltip hover-refresh" data-ticker="${t}" data-tooltip="${tooltipText}">${t}</span>`;
-                } else {
-                    return `<span class="ticker ${colorClass} tooltip hover-refresh" data-ticker="${t}" data-tooltip="Loading stats...\nClick to view chart">${t}</span>`;
-                }
-            }).join(' ');
-            tickersSpan.innerHTML = tickerElements;
-            
-            // Attach hover listeners for real-time refresh
-            attachHoverListeners(tickersSpan, row);
-            
-            // Fetch missing volumes progressively in background (non-blocking)
-            for (const ticker of row.tickers) {
-                if (!row.volumes[ticker]) {
-                    fetchVolume(ticker, row, tickersSpan).catch(err => {
-                        console.error(`Error fetching volume for ${ticker}:`, err);
-                    });
-                }
-            }
+        return false;
+    });
+
+    // Filter out read items - only show unread matches
+    const unreadHits = uniqueHits.filter(row => !isRead(row.title));
+
+    if (unreadHits.length === 0) {
+        if (uniqueHits.length === 0) {
+            container.innerHTML = `<div class="loading">No matches yet. Watching ${keywords.length} keyword${keywords.length !== 1 ? 's' : ''}…</div>`;
         } else {
-            tickersSpan.innerHTML = '<span class="ticker">—</span>';
+            container.innerHTML = `<div class="loading">All matches read. Watching for new items…</div>`;
         }
-        
-        // Remove new item highlight after animation
-        if (isNew) {
-            setTimeout(() => {
-                itemDiv.classList.remove('new-item');
-            }, 3000);
-        }
+        return;
     }
-}
 
-async function fetchVolume(ticker, row, tickersSpan, forceRefresh = false) {
-    try {
-        const cleanTicker = cleanTickerSymbol(ticker);
-        const url = forceRefresh 
-            ? `/api/volume/${encodeURIComponent(cleanTicker)}?refresh=true`
-            : `/api/volume/${encodeURIComponent(cleanTicker)}`;
-        const response = await fetch(url);
-        const data = await response.json();
-        
-        if (data.metrics) {
-            // Update the row data
-            row.volumes[ticker] = data.metrics;
-            
-            // Update the display
-            let tickerElements = row.tickers.map(t => {
+    let html = '';
+    unreadHits.forEach((row, i) => {
+        const isNew = newTitles.has(row.title);
+        const itemClass = isNew ? 'news-item new-item' : 'news-item';
+
+        const tickersHtml = row.tickers && row.tickers.length > 0
+            ? row.tickers.map(t => {
                 const colorClass = getTickerColorClass(t);
-                const metrics = row.volumes[t];
-                
-                if (metrics && typeof metrics === 'object') {
-                    // Build tooltip with change color
-                    let changeDisplay = metrics.change || 'N/A';
-                    let changeColor = '';
-                    if (changeDisplay !== 'N/A' && changeDisplay.includes('%')) {
-                        changeColor = changeDisplay.startsWith('-') ? '🔴' : '🟢';
-                    }
-                    
-                    const tooltipText = `${changeColor} Change: ${changeDisplay}\nRel Volume: ${metrics.rel_volume}\nVolume: ${metrics.volume}\nShs Float: ${metrics.shs_float}\n\nClick to see chart`;
-                    return `<span class="ticker ${colorClass} tooltip hover-refresh" data-ticker="${t}" data-tooltip="${tooltipText}">${t}</span>`;
-                } else {
-                    return `<span class="ticker ${colorClass} tooltip hover-refresh" data-ticker="${t}" data-tooltip="Loading stats...\nClick to view chart">${t}</span>`;
-                }
-            }).join(' ');
-            tickersSpan.innerHTML = tickerElements;
-            
-            // Re-attach hover listeners after updating HTML
-            attachHoverListeners(tickersSpan, row);
-        }
-    } catch (error) {
-        console.error(`Error fetching volume for ${ticker}:`, error);
-        row.volumes[ticker] = { volume: 'N/A', rel_volume: 'N/A', shs_float: 'N/A', change: 'N/A' };
-    }
-}
+                return `<span class="ticker ${colorClass}">${escapeHtml(t)}</span>`;
+            }).join('')
+            : '<span class="ticker">—</span>';
 
-function openTickerInfo(ticker) {
-    if (!ticker || ticker === '—') return;
-    // Remove any percentage modifiers
-    const cleanTicker = ticker.split('+')[0].split('-')[0].trim();
-    // Open finviz chart
-    window.open(`https://finviz.com/quote.ashx?t=${cleanTicker}`, '_blank');
+        const timestampHtml = row.timestamp ? `<span class="timestamp">${escapeHtml(row.timestamp)}</span>` : '';
+        const newBadge = isNew ? '<span class="new-badge">NEW</span>' : '';
+
+        html += `
+            <div class="${itemClass}" data-title="${escapeHtml(row.title)}" data-url="${escapeHtml(row.url || '')}">
+                <span class="news-number">${i + 1}</span>
+                ${newBadge}
+                <div class="tickers">${tickersHtml}</div>
+                <div class="headline">${escapeHtml(row.title)}</div>
+                ${timestampHtml}
+            </div>
+        `;
+    });
+
+    container.innerHTML = html;
+
+    // Open article in new tab when clicked, then mark as read and remove
+    container.querySelectorAll('.news-item').forEach(item => {
+        item.addEventListener('click', () => {
+            const title = item.dataset.title;
+            const url = item.dataset.url;
+
+            if (title) {
+                // Open article in new tab if URL exists
+                if (url) {
+                    window.open(url, '_blank');
+                }
+
+                // Mark as read and remove from view
+                markAsRead(title);
+                item.remove();
+                // Re-render to update numbers
+                renderMatched(newTitles);
+            }
+        });
+    });
+
+    // Auto-mark as read after 30 seconds and remove from view
+    newTitles.forEach(title => {
+        setTimeout(() => {
+            if (!isRead(title)) {
+                markAsRead(title);
+                // Re-render to remove the item
+                renderMatched(newTitles);
+            }
+        }, 30000);
+    });
 }
 
 function escapeHtml(text) {
+    if (!text) return '';
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
 }
 
-// Attach hover listeners to ticker elements for real-time refresh
-function attachHoverListeners(tickersSpan, row) {
-    const tickerElements = tickersSpan.querySelectorAll('.hover-refresh');
-    tickerElements.forEach(tickerEl => {
-        const ticker = tickerEl.dataset.ticker;
-        
-        tickerEl.addEventListener('mouseenter', () => {
-            // Clear any existing timer for this ticker
-            if (hoverTimers[ticker]) {
-                clearTimeout(hoverTimers[ticker]);
-            }
-            
-            // Get hover delay from config (in milliseconds)
-            const hoverDelay = appConfig 
-                ? appConfig.refresh.hover_refresh_delay_seconds * 1000 
-                : 1000;
-            
-            // Set a timer to refresh on hover
-            hoverTimers[ticker] = setTimeout(async () => {
-                console.log(`Hover refresh for ${ticker}`);
-                await fetchVolume(ticker, row, tickersSpan, true); // Force refresh
-            }, hoverDelay);
-        });
-        
-        tickerEl.addEventListener('mouseleave', () => {
-            // Cancel the timer if user moves mouse away before delay expires
-            if (hoverTimers[ticker]) {
-                clearTimeout(hoverTimers[ticker]);
-                delete hoverTimers[ticker];
-            }
-        });
-    });
-}
+// Keyboard shortcuts for speed
+document.addEventListener('keydown', (e) => {
+    // Ignore if typing in input/textarea
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
-// Keyword Management Functions
-async function addKeyword() {
-    const input = document.getElementById('keyword-input');
-    const keyword = input.value.trim();
-    
-    if (!keyword) {
-        alert('Please enter a keyword');
-        return;
+    // C = Clear all read items
+    if (e.key.toLowerCase() === 'c' && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        clearReadTitles();
     }
-    
-    try {
-        const response = await fetch('/api/keywords/add', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ keyword: keyword })
-        });
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            input.value = '';
-            await fetchData(); // Refresh to get updated keywords
-        } else {
-            alert(data.error || 'Failed to add keyword');
-        }
-    } catch (error) {
-        console.error('Error adding keyword:', error);
-        alert('Error adding keyword');
-    }
-}
 
-async function removeKeyword(keyword) {
-    try {
-        const response = await fetch('/api/keywords/remove', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ keyword: keyword })
-        });
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            await fetchData(); // Refresh to get updated keywords
-        } else {
-            alert(data.error || 'Failed to remove keyword');
-        }
-    } catch (error) {
-        console.error('Error removing keyword:', error);
-        alert('Error removing keyword');
+    // Esc = Close popup
+    if (e.key === 'Escape') {
+        closeUrgentAlert();
     }
-}
 
-async function clearAllKeywords() {
-    if (!confirm('Clear all UI keywords? (keywords.txt will not be affected)')) {
-        return;
-    }
-    
-    try {
-        const response = await fetch('/api/keywords/clear', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            }
-        });
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            await fetchData(); // Refresh to get updated keywords
-        } else {
-            alert('Failed to clear keywords');
+    // Enter = Open first unread item
+    if (e.key === 'Enter' && !e.shiftKey) {
+        const firstItem = document.querySelector('.news-item:not(.read-item)');
+        if (firstItem) {
+            firstItem.click();
         }
-    } catch (error) {
-        console.error('Error clearing keywords:', error);
-        alert('Error clearing keywords');
     }
-}
-
-async function reloadFromFile() {
-    try {
-        const response = await fetch('/api/keywords/reload', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            }
-        });
-        
-        const data = await response.json();
-        
-        if (data.success) {
-            await fetchData(); // Refresh to get updated keywords
-            alert(`Reloaded ${data.file_keywords.length} keywords from file`);
-        } else {
-            alert('Failed to reload keywords');
-        }
-    } catch (error) {
-        console.error('Error reloading keywords:', error);
-        alert('Error reloading keywords');
-    }
-}
-
-// Event Listeners
-document.addEventListener('DOMContentLoaded', () => {
-    // Add keyword button
-    document.getElementById('add-keyword-btn').addEventListener('click', addKeyword);
-    
-    // Enter key in input field
-    document.getElementById('keyword-input').addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') {
-            addKeyword();
-        }
-    });
-    
-    // Clear all button
-    document.getElementById('clear-all-btn').addEventListener('click', clearAllKeywords);
-    
-    // Reload file button
-    document.getElementById('reload-file-btn').addEventListener('click', reloadFromFile);
 });
 
-// Initialize app
-async function initApp() {
-    // Load config first
-    await loadConfig();
-    
-    // Initial data fetch
-    await fetchData();
-    
-    // Set up polling intervals using config
-    const newsPollInterval = appConfig 
-        ? appConfig.refresh.news_poll_interval_seconds * 1000 
-        : 15000;
-    const hoverDelay = appConfig
-        ? appConfig.refresh.hover_refresh_delay_seconds
-        : 1;
-    
-    console.log(`News poll interval: ${newsPollInterval / 1000}s`);
-    console.log(`Hover refresh delay: ${hoverDelay}s`);
-    
-    // Poll for news updates (timestamps)
-    setInterval(fetchData, newsPollInterval);
-    
-    // Update timestamps on client side every minute
-    setInterval(updateTimestamps, 60000); // 60 seconds
+// Simulate multiple breaking news for testing queue behavior
+function simulateNewNews() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const simulateMode = urlParams.get('simulate') === 'true';
+
+    if (!simulateMode) return;
+
+    // Find multiple keywords to simulate (create 2-4 fake news items at once)
+    if (keywords.length === 0) return;
+
+    const numItems = Math.floor(Math.random() * 3) + 2; // 2-4 items
+    const selectedKeywords = [];
+    for (let i = 0; i < numItems && i < keywords.length; i++) {
+        const keyword = keywords[Math.floor(Math.random() * keywords.length)];
+        if (!selectedKeywords.includes(keyword)) {
+            selectedKeywords.push(keyword);
+        }
+    }
+
+    const fakeNewsItems = selectedKeywords.map((keyword, index) => ({
+        title: `🚨 ${keyword.toUpperCase()} Alert: Major Breaking News - Immediate Action Required`,
+        tickers: ['TEST', `SIM${index + 1}`],
+        timestamp: '0 min',
+        url: 'https://finviz.com',
+        fetch_time: Date.now() / 1000
+    }));
+
+    // Add to seen titles initially
+    fakeNewsItems.forEach(item => {
+        seenTitles.add(item.title);
+    });
+
+    // Simulate them arriving as "new" news
+    setTimeout(() => {
+        // Remove from seen so popups trigger
+        fakeNewsItems.forEach(item => {
+            seenTitles.delete(item.title);
+        });
+
+        // Add all to all_rows
+        fakeNewsItems.reverse().forEach(item => {
+            allRows.unshift(item);
+        });
+
+        // Process alerts (will queue multiple items properly)
+        processAlerts(fakeNewsItems);
+
+        // Render with these as new
+        const newTitles = new Set(fakeNewsItems.map(item => item.title));
+        renderMatched(newTitles);
+        updateUnreadCounter();
+
+        console.log(`📰 Simulated ${fakeNewsItems.length} breaking news items:`, fakeNewsItems.map(i => i.title));
+    }, 2000); // Show after 2 seconds
 }
 
-// Start the app
-initApp();
+// Poll for updates every 15 seconds
+setInterval(fetchData, 15000);
+fetchData();
+
+// Auto-simulate if in simulate mode (after initial load)
+setTimeout(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('simulate') === 'true') {
+        // Simulate multiple news every 15 seconds in simulate mode
+        setInterval(simulateNewNews, 15000);
+        // First batch after 5 seconds
+        setTimeout(simulateNewNews, 5000);
+    }
+}, 3000);
