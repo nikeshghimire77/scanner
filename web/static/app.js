@@ -213,6 +213,78 @@ function showUrgentAlert(title, tickers, queuePosition = null, totalInQueue = nu
     if ("Notification" in window && Notification.permission === "granted") {
         new Notification(`🚨 URGENT: ${tickerStr}`, { body: title });
     }
+
+    // Read headline out loud using text-to-speech (natural voice)
+    if ('speechSynthesis' in window) {
+        // Cancel any ongoing speech
+        window.speechSynthesis.cancel();
+
+        // Wait a moment for alarm to play first
+        setTimeout(() => {
+            const utterance = new SpeechSynthesisUtterance();
+
+            // Natural, human-like voice settings
+            utterance.text = `${tickerStr}. ${title}`;
+            utterance.rate = 1.1; // Slightly faster for natural flow
+            utterance.pitch = 1.1; // Slightly higher pitch (more human-like)
+            utterance.volume = 1.0; // Max volume
+
+            // Try to use most natural-sounding voice
+            const voices = window.speechSynthesis.getVoices();
+
+            // Prefer natural voices in order: premium > Google > enhanced > female > male
+            let selectedVoice = null;
+
+            // First choice: Premium/natural voices
+            selectedVoice = voices.find(v =>
+                v.name.includes('Premium') ||
+                v.name.includes('Natural') ||
+                v.name.includes('WaveNet') ||
+                v.name.includes('Neural')
+            );
+
+            // Second: Google voices (usually good quality)
+            if (!selectedVoice) {
+                selectedVoice = voices.find(v =>
+                    v.name.includes('Google') &&
+                    (v.name.includes('Female') || v.name.includes('US'))
+                );
+            }
+
+            // Third: Any female English voice (often sound more natural)
+            if (!selectedVoice) {
+                selectedVoice = voices.find(v =>
+                    v.lang.startsWith('en') &&
+                    (v.name.toLowerCase().includes('female') ||
+                        v.name.toLowerCase().includes('samantha') ||
+                        v.name.toLowerCase().includes('karen') ||
+                        v.name.toLowerCase().includes('susan'))
+                );
+            }
+
+            // Fourth: Any enhanced or high-quality voice
+            if (!selectedVoice) {
+                selectedVoice = voices.find(v =>
+                    v.name.includes('Enhanced') ||
+                    v.name.includes('High Quality')
+                );
+            }
+
+            // Fallback: Any English voice
+            if (!selectedVoice && voices.length > 0) {
+                selectedVoice = voices.find(v => v.lang.startsWith('en')) || voices[0];
+            }
+
+            if (selectedVoice) {
+                utterance.voice = selectedVoice;
+            }
+
+            utterance.lang = 'en-US';
+
+            // Speak it
+            window.speechSynthesis.speak(utterance);
+        }, 600); // Start reading after alarm starts
+    }
 }
 
 function closeUrgentAlert() {
@@ -285,6 +357,15 @@ function processAlerts(newItems) {
 // Request notification permission on load
 if ("Notification" in window && Notification.permission === "default") {
     Notification.requestPermission();
+}
+
+// Load voices for text-to-speech (some browsers need this)
+if ('speechSynthesis' in window) {
+    // Some browsers need voices to be loaded first
+    window.speechSynthesis.getVoices(); // Trigger voice loading
+    window.addEventListener('voiceschanged', () => {
+        // Voices are now loaded
+    });
 }
 
 // Fetch data from the server
@@ -437,9 +518,9 @@ function renderMatched(newTitles = new Set()) {
                     ${newBadge}
                     <div class="tickers">${tickersHtml}</div>
                     <div class="headline">${highlightKeywords(row.title, keywords)}</div>
-                    ${timestampHtml}
-                </div>
-            `;
+                ${timestampHtml}
+            </div>
+        `;
         });
 
         container.innerHTML = html;
