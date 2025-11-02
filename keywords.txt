@@ -1,2 +1,163 @@
+offering
+private placement
 public offering
-
+equity raise
+ATM offering
+shelf registration
+secondary offering
+PIPE financing
+debt offering
+convertible notes
+warrant exercise
+merger
+acquisition
+buyout
+takeover
+spin-off
+spinoff
+partnership
+strategic collaboration
+joint venture
+licensing agreement
+seeking strategic alternatives
+phase 1
+phase 2
+phase 3
+clinical trial
+clinical data
+trial results
+topline results
+positive data
+negative data
+FDA approval
+FDA clearance
+FDA rejection
+FDA panel
+EUA
+emergency use authorization
+NDA submission
+IND filing
+orphan drug
+fast track designation
+breakthrough therapy
+biotech
+biopharma
+CE mark
+EU approval
+China approval
+India approval
+patent granted
+patent litigation
+clinical hold
+study halted
+trial paused
+trial resumed
+commercialization
+launch
+distribution agreement
+contract award
+government funding
+milestone payment
+insider buying
+insider selling
+dividend
+reverse split
+stock split
+buyback
+share repurchase
+earnings beat
+earnings miss
+guidance raised
+guidance cut
+price target raised
+price target cut
+analyst upgrade
+analyst downgrade
+restructuring
+layoffs
+leadership change
+CEO resignation
+CEO appointed
+board changes
+expansion
+production halted
+production resumed
+supply agreement
+AI
+artificial intelligence
+AI partnership
+machine learning
+OpenAI
+NVIDIA
+semiconductor
+data center
+EV partnership
+battery deal
+energy storage
+hydrogen
+solar
+space
+satellite
+defense contract
+DoD
+NASA
+bitcoin
+ethereum
+crypto
+cryptocurrency
+blockchain
+bitcoin ETF
+ethereum ETF
+ETF approval
+ETF delay
+crypto adoption
+short squeeze
+halt
+halted
+resumes trading
+resumed trading
+high volume
+unusual volume
+momentum
+breakout
+gap up
+gap down
+pump
+dump
+microcap
+small cap
+floater
+rumor
+chatter
+breaking news
+market moving
+IPO
+form 4
+form 8-k
+lawsuit
+class action
+settlement
+SEC approval
+SEC investigation
+SEC subpoena
+tariffs
+sanctions
+FOMC
+interest rate
+CPI
+PPI
+jobs report
+inflation data
+macroeconomic
+dow jones
+nasdaq
+s&p 500
+pre-market
+after hours
+volatility
+activist investor
+short report
+court ruling
+FDA meeting
+advisory committee
+adcom
